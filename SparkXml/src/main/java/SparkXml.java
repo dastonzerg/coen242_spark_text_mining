@@ -1,6 +1,8 @@
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.function.FilterFunction;
 import org.apache.spark.api.java.function.ForeachFunction;
+import static org.apache.spark.sql.functions.col;
+import org.apache.spark.sql.functions;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.SparkContext;
 import org.apache.spark.sql.Row;
@@ -12,48 +14,6 @@ import java.io.*;
 
 
 public class SparkXml {
-    private static class Contributor {
-        Long id;
-        String username;
-        Contributor(Long _id, String _username) {
-            id=_id;
-            username=_username;
-        }
-        @Override
-        public boolean equals(Object ob) {
-            if(!(ob instanceof Contributor)) {
-                return false;
-            }
-            Contributor another=(Contributor)ob;
-            return id.equals(another.id);
-        }
-        @Override
-        public int hashCode() {
-            return (int)((31*id+username.hashCode())%(long)Integer.MAX_VALUE);
-        }
-    }
-
-    private static class Revision {
-        Long id;
-        String timestamp;
-        Revision(Long _id, String _timestamp) {
-            id=_id;
-            timestamp=_timestamp;
-        }
-        @Override
-        public boolean equals(Object ob) {
-            if(!(ob instanceof Revision)) {
-                return false;
-            }
-            Revision another=(Revision)ob;
-            return id.equals(another.id);
-        }
-        @Override
-        public int hashCode() {
-            return (int)((31*id+timestamp.hashCode())%(long)Integer.MAX_VALUE);
-        }
-    }
-
     private static long MinorCount(Dataset<Row> df) {
         Dataset<Row> dfMinorInRevision=df.select("revision.minor").
                 filter("revision.minor is not null");
@@ -81,57 +41,40 @@ public class SparkXml {
     }
 
     private static void outputPagesAtMost5Url
-            (Dataset<Row> df, String path) throws Exception {
+            (Dataset<Row> df, String path) {
         df.javaRDD().map(row->String.format("%-20d%-50s", row.getLong(0), row.getString(1))).repartition(1).saveAsTextFile(path);
-
-//        df.foreach((ForeachFunction<Row>) row -> {
-//            writer.write("111\n");
-//        });
-
-//        List<Row> rows=df.collectAsList();
-//        int count=0;
-//        writer.write(String.format("%-10s%-20s%-50s", "Index", "Id", "Title")+"\n");
-//        for(Row row:rows) {
-//            writer.write((String.format("%-10d%-20d%-50s", count++, row.getLong(0), row.getString(1)))+"\n");
-//        }
     }
 
-    private static TreeMap<Contributor, TreeSet<Revision>> getContributors(Dataset<Row> df) {
+    private static Dataset<Row> getContributors(Dataset<Row> df, SparkSession sparkSession) throws Exception {
         Dataset<Row> contributorSet=df.select(df.col("revision.contributor.id").as("contributor_id"),
                 df.col("revision.contributor.username").as("contributor_username"),
                 df.col("revision.id").as("revision_id"),
                 df.col("revision.timestamp").as("revision_timestamp")).filter("contributor_id is not null").filter("revision_id is not null");
-        List<Row> rows=contributorSet.collectAsList();
-        TreeMap<Contributor, TreeSet<Revision>> contributorToRevisions=new TreeMap<>((o1, o2)->Long.compare(o1.id, o2.id));
-
-        for(Row row:rows) {
-            Contributor contributor=new Contributor(row.getLong(0), row.getString(1));
-            if(!contributorToRevisions.containsKey(contributor)) {
-                contributorToRevisions.put(contributor, new TreeSet<>((o1, o2)->o2.timestamp.compareTo(o1.timestamp)));
-            }
-            contributorToRevisions.get(contributor).add(new Revision(row.getLong(2), row.getString(3)));
-        }
-        return contributorToRevisions;
+        contributorSet.createGlobalTempView("temp");
+        Dataset<Row> contributorWithMore1RevisionSet=sparkSession.sql("select contributor_id as contributor_id_temp, count(revision_id) as revision_num " +
+                "from global_temp.temp group by contributor_id having revision_num>1");
+        sparkSession.catalog().dropGlobalTempView("temp");
+        Dataset<Row> resultContributorSet=contributorWithMore1RevisionSet.
+                join(contributorSet,
+                        contributorWithMore1RevisionSet.col("contributor_id_temp").
+                                equalTo(contributorSet.col("contributor_id"))).
+                orderBy(col("revision_timestamp").desc()).select("contributor_id", "contributor_username", "revision_id", "revision_timestamp");
+        Dataset<Row> result=resultContributorSet.groupBy("contributor_id", "contributor_username").
+                agg(functions.collect_list(col("revision_id")).as("revision_id_list")).
+                orderBy("contributor_id").select("contributor_id", "contributor_username", "revision_id_list");
+        return result;
     }
 
-    private static void outputContributors
-            (TreeMap<Contributor, TreeSet<Revision>> contributorToRevisions, BufferedWriter writer) throws Exception {
-        for(Map.Entry<Contributor, TreeSet<Revision>> entry:contributorToRevisions.entrySet()) {
-            Contributor contributor=entry.getKey();
-            TreeSet<Revision> revisions=entry.getValue();
-            if(revisions.size()>1) {
-                writer.write(String.format("%-20d%-20s", contributor.id, contributor.username)+"\n");
-                for(Revision revision:revisions) {
-                    writer.write(String.format("%-20d%-20s", revision.id, revision.timestamp)+"\n");
-                }
-                writer.write("\n");
-            }
-        }
+    private static void outputContributors(Dataset<Row> df, String path) {
+//        df.javaRDD().map(row->{
+//            String format="%-20d%-40s"+"%-"+row.getString(2).length()+"s";
+//            return String.format(format, row.getLong(0), row.getString(1), row.getString(2));}).repartition(1).saveAsTextFile(path);
+        df.javaRDD().repartition(1).saveAsTextFile(path);
     }
 
     public static void main(String[] args) throws Exception {
         long startTime=System.currentTimeMillis();
-        BufferedWriter writer=new BufferedWriter(new FileWriter(args[1]+"output.txt"));
+        BufferedWriter writer=new BufferedWriter(new FileWriter(args[1]+"time.txt"));
         SparkConf sparkConf = new SparkConf().setMaster("local[*]").setAppName("SparkXml");
         sparkConf.set("spark.driver.memory", "8g");
         sparkConf.set("spark.memory.offHeap.enabled","true");
@@ -145,8 +88,9 @@ public class SparkXml {
                 option("rowTag", "page").load(args[0]);
         dataframe.persist();
         //outputMinorCount(dataframe, writer);
-        outputPagesAtMost5Url(pagesAtMost5Url(dataframe), args[1]+"output");
-        //outputContributors(getContributors(dataframe), writer);
+        //outputPagesAtMost5Url(pagesAtMost5Url(dataframe), args[1]+"output");
+        outputContributors(getContributors(dataframe, sparkSession), args[1]+"output");
+        //getContributors(dataframe, sparkSession);
         long endTime=System.currentTimeMillis();
         writer.write("\nTotal Execution Time is: "+(endTime-startTime)/1000+" s\n");
         writer.close();
