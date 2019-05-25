@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="scala-compiler-2.11.12">
+    <CLASSES>
+      <root url="jar:///usr/local/spark/jars/scala-compiler-2.11.12.jar!/" />
+      <root url="jar:///usr/local/spark/jars/scala-library-2.11.12.jar!/" />
+      <root url="jar:///usr/local/spark/jars/scala-parser-combinators_2.11-1.1.0.jar!/" />
+      <root url="jar:///usr/local/spark/jars/scala-reflect-2.11.12.jar!/" />
+      <root url="jar:///usr/local/spark/jars/scala-xml_2.11-1.0.5.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
