@@ -30,7 +30,7 @@ public class SparkXml {
                  filter("revision.text._VALUE is not null");
         return idTitleRevSet.filter((FilterFunction<Row>) r->{
             String text=r.getString(2);
-            Pattern urlPattern=Pattern.compile("url=", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
+            Pattern urlPattern=Pattern.compile("https?://", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
             Matcher matcher=urlPattern.matcher(text);
             int count=0;
             while(matcher.find()) {
@@ -88,8 +88,8 @@ public class SparkXml {
                 option("rowTag", "page").load(args[0]);
         dataframe.persist();
         //outputMinorCount(dataframe, writer);
-        //outputPagesAtMost5Url(pagesAtMost5Url(dataframe), args[1]+"output");
-        outputContributors(getContributors(dataframe, sparkSession), args[1]+"output");
+        outputPagesAtMost5Url(pagesAtMost5Url(dataframe), args[1]+"output");
+        //outputContributors(getContributors(dataframe, sparkSession), args[1]+"output");
         //getContributors(dataframe, sparkSession);
         long endTime=System.currentTimeMillis();
         writer.write("\nTotal Execution Time is: "+(endTime-startTime)/1000+" s\n");
